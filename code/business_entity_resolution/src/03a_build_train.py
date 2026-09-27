@@ -1,6 +1,7 @@
 """Stage 03a-v3 SAFE.
 v2 died: Q(1000x262k) @ X.T(262kx6.2M) = 25GB dense.
 v3: per-query matmul against CSC index (25MB each), chunked cdist.
+v4: BATCH=200 queries/block -> 200x6.2M float32 = 5GB (fits), 60 matmuls not 12k.
 Saves WORK/feat_train.parquet (same schema).
 """
 import pandas as pd, numpy as np, os, re, unicodedata, gc, time
@@ -44,17 +45,22 @@ for c in ['US', 'IN']:
     Xa = sparse.load_npz(f'{WORK}/addr_matrix_{c}.npz').tocsc()
     ids = pd.read_parquet(f'{WORK}/block_ids_{c}.parquet')['entity_id'].tolist()
     print(f'{c}: {len(sub)} queries vs {Xn.shape[0]:,} docs t={time.time()-t0:.0f}s', flush=True)
-    for qi, s in enumerate(sub):
-        qn = nvec.transform([norm(s1map[s][0])]); qa = avec.transform([anorm(s1map[s][1])])
-        sn = (qn @ Xn.T).toarray().ravel(); sa = (qa @ Xa.T).toarray().ravel()
-        tn = set(np.argpartition(-sn, KN)[:KN].tolist()) if (sn > 0).any() else set()
-        ta = set(np.argpartition(-sa, KA)[:KA].tolist()) if (sa > 0).any() else set()
-        for j in tn | ta:
-            cand_rows.append((s, ids[j])); need23.add(ids[j])
-        del qn, qa, sn, sa
-        if (qi + 1) % 1000 == 0:
-            print(f'  {c} {qi+1}/{len(sub)} t={time.time()-t0:.0f}s', flush=True); gc.collect()
-    del Xn, Xa, ids; gc.collect()
+    XnT = Xn.T.tocsr().astype(np.float32); XaT = Xa.T.tocsr().astype(np.float32)
+    del Xn, Xa; gc.collect()
+    B = 200
+    for bi in range(0, len(sub), B):
+        b = sub[bi:bi+B]
+        Qn = nvec.transform([norm(s1map[s][0]) for s in b]).astype(np.float32)
+        Qa = avec.transform([anorm(s1map[s][1]) for s in b]).astype(np.float32)
+        Sn = (Qn @ XnT).toarray(); Sa = (Qa @ XaT).toarray()
+        del Qn, Qa; gc.collect()
+        Tn = np.argpartition(-Sn, KN, axis=1)[:, :KN]; Ta = np.argpartition(-Sa, KA, axis=1)[:, :KA]
+        for r, s in enumerate(b):
+            for j in set(Tn[r].tolist()) | set(Ta[r].tolist()):
+                cand_rows.append((s, ids[j])); need23.add(ids[j])
+        del Sn, Sa, Tn, Ta; gc.collect()
+        print(f'  {c} {min(bi+B, len(sub))}/{len(sub)} t={time.time()-t0:.0f}s', flush=True)
+    del XnT, XaT, ids; gc.collect()
 print(f'pairs: {len(cand_rows):,} need23: {len(need23):,} t={time.time()-t0:.0f}s', flush=True)
 m23 = {}
 for p in [f'{TRAIN}/train_source2.tsv', f'{TRAIN}/train_source3.tsv']:
