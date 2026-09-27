@@ -44,7 +44,26 @@ gh repo create amazon-ml-er --public --source=. --push
 - `output/` — ONLY small final TSVs for portal upload. Never commit big data.
 - `data/` — NOT in repo. Lives only on Drive (`MyDrive/AMAZON_ML/data/`).
 
-## Roadmap (F_0.5, precision-heavy)
+## Colab one-cell runner (copy-paste into ONE empty cell, Run)
+
+```python
+import subprocess, sys, os
+REPO='https://github.com/22f3003027/amazon-ml-er.git'; DST='/content/amazon-ml-er'
+if not os.path.exists(DST):
+    subprocess.run(['git','clone','--depth','1',REPO,DST],check=True)
+else:
+    subprocess.run(['git','-C',DST,'pull','--ff-only'],check=False)
+subprocess.run([sys.executable,'-m','pip','install','-q','pandas','numpy','scikit-learn','scipy','rapidfuzz','lightgbm','pyarrow','joblib','tqdm'],check=True)
+STAGES=[]  # e.g. ['02a_build_index.py','02b_recall_test.py']
+for s in STAGES:
+    print('\n'+'='*70+'\n>>> '+s, flush=True)
+    r=subprocess.run([sys.executable,f'{DST}/code/business_entity_resolution/src/{s}'],capture_output=True,text=True)
+    print(r.stdout[-6000:]); print(r.stderr[-6000:]); print('<<< exit',r.returncode)
+    if r.returncode!=0: break
+```
+
+Why `capture_output`: Colab otherwise swallows tracebacks. `exit 2` = script file
+missing (fresh runtime lost the git clone — the `clone-if-missing` lines above fix it).
 1. `00_setup_colab` ✅ (created) — mount, deps, unzip, row counts
 2. `01_eda` ✅ (created) — sampled EDA, noise patterns, France check
 3. `02_blocking` (next) — TF-IDF + country-aware blocking, recall ceiling + reduction ratio
